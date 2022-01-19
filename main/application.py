@@ -1,13 +1,27 @@
-from flask import Flask
+from flask import Flask, jsonify
 from flask_restful import reqparse, abort, Api, Resource
+from flaskext.mysql import MySQL
 #from config import CONSTANTS
 import logging
 from logging.handlers import TimedRotatingFileHandler
 
 FORMATTER = logging.Formatter("%(asctime)s — %(name)s — %(levelname)s — %(message)s")
+#Create an instance of MySQL
+mysql = MySQL()
 
 app = Flask(__name__)
 api = Api(app)
+
+#Set database credentials in config.
+app.config['MYSQL_DATABASE_USER'] = 'root'
+app.config['MYSQL_DATABASE_PASSWORD'] = 'root'
+app.config['MYSQL_DATABASE_DB'] = 'mysql'
+app.config['MYSQL_DATABASE_HOST'] = 'localhost'
+mysql.init_app(app)
+
+'''
+    List the task performed by the application
+'''
 
 TASKS = {
     '1 (GetList)': 'Get all programmatic language',
@@ -16,15 +30,6 @@ TASKS = {
     '4 (Delete)': 'Delete the language',
 }
 
-data = {
-    "ID1": {"Languages": "Python", "Author": "Guido van Rossum"},
-    "ID2": {"Languages": "Angular", "Author": "Deborah Kurata"},
-    "ID3": {"Languages": "Perl", "Author": "Larry Arnold Wall"}
-}
-
-'''
-    List the task performed by the application
-'''
 
 def abort_if_task_doesnt_exist(task_id):
     isPresent = False
@@ -56,7 +61,6 @@ def get_file_handler():
    return file_handler
 
 def get_logger(logger_name):
-    print('logging')
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.INFO)  # better to have too much log than not enough
     logger.addHandler(get_file_handler())
@@ -74,33 +78,71 @@ parser.add_argument('language', type=str, required=False, help="Get the Language
     GET/UPDATE/DELETE the data.
 '''
 class Task(Resource):
+    logger = None
+
     def __init__(self):
-        logger = get_logger("Task")
+        self.logger = get_logger("Task")
 
     def get(self, task_id):
-        logger = get_logger("Task")
-        logger.info("Retrieve Language Data")
+        self.logger.info("Retrieve Language Data")
         args = parser.parse_args()
         abort_if_task_doesnt_exist(task_id)
-        if args['id'] and data_exist(args['id']):
-            id = args['id']
-            return data["ID" + id]
-        return data
+
+        try:
+            conn = mysql.connect()
+            cursor = conn.cursor()
+            sqlselectquery = """select * from data.language"""
+            if args['id'] and data_exist(args['id']):
+                sqlselectquery = sqlselectquery +""" where id =%s """
+            if args['id']:
+                cursor.execute(sqlselectquery,(int(args['id'])))
+            else:
+                cursor.execute(sqlselectquery)
+            rows = cursor.fetchall()
+            return jsonify(rows)
+        except Exception as e:
+            print(e)
+        finally:
+            cursor.close()
+            conn.close()
 
     def delete(self, task_id):
+        self.logger.info("Delete Language Data")
+        print("Delete data")
         args = parser.parse_args()
         abort_if_task_doesnt_exist(task_id)
-        if args['id'] and data_exist(args['id']):
-            id = args['id']
-            del data["ID" + id]
-        return '', 204
+        try:
+            conn = mysql.connect()
+            cursor = conn.cursor()
+            print("args",args['id'])
+            if args['id']:
+                deletequery = """delete from data.language where id = %s"""
+                cursor.execute(deletequery, (int(args['id'])))
+                conn.commit()
+        except Exception as e:
+            print(e)
+        finally:
+            cursor.close()
+            conn.close()
+        return 'Deletion is successful', 204
 
     def put(self, task_id):
+        self.logger.info("Update Language Data")
         args = parser.parse_args()
         abort_if_task_doesnt_exist(task_id)
-        if args['id'] and data_exist("ID" + args['id']):
-            id = args['id']
-            data["ID" + id]['Author'] = args['author']
+
+        try:
+            conn = mysql.connect()
+            cursor = conn.cursor()
+            sql_update_query = """Update data.language set author = %s where language = %s"""
+            input_data =(args['author'] , args['language'])
+            cursor.execute(sql_update_query, (input_data))
+            conn.commit()
+        except Exception as e:
+            print(e)
+        finally:
+            cursor.close()
+            conn.close()
         return '', 201
 
 
@@ -112,11 +154,27 @@ class TaskList(Resource):
         return TASKS
 
     def post(self):
+        self.logger.info("Add Language Data")
         args = parser.parse_args()
-        data_id = int(max(data.keys()).lstrip('ID')) + 1
-        data_id = 'ID' + str(data_id)
-        data[data_id] = {"Language": args['language'], "Author": args['author']}
-        return data[data_id], 201
+        try:
+            conn = mysql.connect()
+            cursor = conn.cursor()
+            sqlselectquery = """select max(id) from data.language"""
+            cursor.execute(sqlselectquery)
+            data_id = cursor.fetchone()[0] + 1
+            input_data =(data_id, args['author'] , args['language'])
+            insert_query = """INSERT INTO data.language (id, language, author) 
+                                  VALUES 
+                                  (%s, %s , %s) """
+            cursor.execute(insert_query , input_data)
+            conn.commit()
+        except Exception as e:
+            print(e)
+        finally:
+            cursor.close()
+            conn.close()
+
+        return "New Language is inserted", 201
 
 
 api.add_resource(TaskList, '/task')
